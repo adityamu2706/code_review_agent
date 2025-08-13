@@ -9,10 +9,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configuration Management
 def load_config():
     """Load configuration from environment and defaults"""
-    # Get API key from environment
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         print("❌ Error: Please set GOOGLE_API_KEY environment variable")
@@ -34,14 +32,42 @@ def setup_api(config):
     genai.configure(api_key=config["google_api_key"])
     return True
 
+def generate_persona_prompt(description, config, model):
+    meta_prompt = (
+        f"You are  a helfpul AI assistant skilled in prompt engineering\n"
+        f"Given this persona description, generate a step by step code review prompt template."
+        f"Persona description: {description}\n\n"
+        f"Make sure to include sections like focus areas, methodology, output format, and examples."
+    )
+
+    try:
+        response = model.generate_content(
+            meta_prompt, 
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=config["max_tokens"],
+                temperature=config["temperature"],
+            )
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"Error generating persona prompt: {e}")
+        return ""
+    
 class CodeReviewPersona:
-    def __init__(self, name: str, focus: str, prompt_template: str, config: Dict):
+    def __init__(self, name: str, config, focus: str, prompt_template= None, description=None):
         self.name = name
         self.focus = focus
-        self.prompt_template = prompt_template
-        self.model = genai.GenerativeModel(config["model_name"])
         self.config = config
-    
+        self.model = genai.GenerativeModel(config['model_name'])
+
+        if prompt_template:
+            self.prompt_template = prompt_template
+        elif description:
+            print(f"Generating a prompt template for {self.name} using meta-prompting")
+            self.prompt_template = generate_persona_prompt(description, self.config, self.model)
+        else:
+            raise ValueError(f"Either prompt template or description must be provided.")
+        
     def review_code(self, code_diff: str) -> Dict:
         """Review code from this persona's perspective"""
         full_prompt = self.prompt_template.format(code_diff=code_diff)
@@ -138,11 +164,10 @@ Execute thorough analysis maintaining enterprise-grade quality standards.""",
         """Run code through selected personas and collect reviews"""
         reviews = []
         
-        # If no personas specified, use all
+        
         if selected_personas is None:
             personas_to_run = self.personas
         else:
-            # Filter personas based on selection
             personas_to_run = [p for p in self.personas if p.name.lower() in [s.lower() for s in selected_personas]]
             
             if not personas_to_run:
@@ -203,10 +228,14 @@ def parse_arguments():
                        help='List all available personas')
     parser.add_argument('--file', type=str,
                        help='Review a specific file')
-    parser.add_argument('--diff', type=str,
-                       help='Review a diff/patch file')
     parser.add_argument('--quiet', action='store_true',
                        help='Minimal output, just show the report')
+    parser.add_argument('--description', type=str,
+                        help='Natural language description for a dynamic persona')
+    parser.add_argument('--name', type=str, default='Custom Persona',
+                        help='Name for the dynamic persona (only if using --description)')
+    parser.add_argument('--focus', type=str, default='Custom review focus',
+                        help='Short focus area for the dynamic persona')
     
     return parser.parse_args()
 
@@ -236,6 +265,12 @@ def main():
     # Initialize the review engine
     engine = CodeReviewEngine(config)
     
+    if args.description:
+        engine.personas.append(CodeReviewPersona(name=args.name,
+                focus=args.focus,
+                description=args.description, 
+                config=config))
+    
     # Handle list personas command
     if args.list_personas:
         engine.list_available_personas()
@@ -250,13 +285,6 @@ def main():
             print(f"📄 Reading file: {args.file}")
         code_content = read_file_content(args.file)
         file_path = args.file
-        if code_content is None:
-            return
-    elif args.diff:
-        if not args.quiet:
-            print(f"📄 Reading diff: {args.diff}")
-        code_content = read_file_content(args.diff)
-        file_path = args.diff
         if code_content is None:
             return
     else:
@@ -301,7 +329,7 @@ class DataProcessor:
     print(formatted_report)
     
     # Save to file
-    output_filename = "review_report.md"
+    output_filename = "review_report.txt"
     with open(output_filename, "w") as f:
         f.write(formatted_report)
     
